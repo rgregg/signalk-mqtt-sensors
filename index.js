@@ -1,6 +1,9 @@
 /*
  * Copyright 2024 Ryan Gregg (ryan@ryangregg.com).
  * Licensed under Apache 2 license. See LICENSE for more information.
+ *
+ * A lot of the understanding of the object model of Siganl K plug-ins comes from
+ * here: https://demo.signalk.org/documentation/_signalk/server-api/ServerAPI.html
  */
 
 const app_name = "signalk-mqtt-sensors";
@@ -19,6 +22,8 @@ const SensorType = Object.freeze({
     HUMIDITY: "humidity",
     BATTERY: "battery",
     PRESSURE: "pressure",
+    SWITCH: "switch",
+    SLIDER: "slider",
     OTHER: "other"
 });
 
@@ -32,13 +37,13 @@ module.exports = function(app) {
     plugin.description = "Signal K node server plugin for mapping values between MQTT and Signal K topics";
 
     // Handle PUT requests to writable paths
-    plugin.handleMessage = function(path, value, callback) {
-        app.debug(`Received PUT request to path: ${path} with value: ${value}`);
+    plugin.putHandler = function (context, path, value, callback) {
+        app.debug(`Received PUT request to context: ${context} path: ${path} with value: ${value}`);
         
         const writableConfig = writablePaths.get(path);
         if (!writableConfig) {
             app.debug(`Path ${path} is not configured as writable`);
-            callback(new Error(`Path ${path} is not writable or not configured`));
+            callback(new Error(`Path ${path} is not configured as writable`));
             return;
         }
 
@@ -69,12 +74,12 @@ module.exports = function(app) {
                 callback(new Error(`Failed to publish command: ${err.message}`));
             } else {
                 app.debug(`Successfully published command to topic ${commandTopic}: ${payload}`);
-                callback(null, {
-                    state: 'COMPLETED',
-                    statusCode: 200
-                });
+                callback({ "state": "COMPLETED", "statusCode": 200 });
             }
         });
+        
+        // We need to return something immedately
+        return { state: 'PENDING' };
     };
 
     /**
@@ -89,18 +94,22 @@ module.exports = function(app) {
         
         // Only allow writable for number and boolean types
         if (sensorType === SensorType.TEMPERATURE || sensorType === SensorType.PRESSURE || 
-            sensorType === SensorType.HUMIDITY || sensorType === SensorType.BATTERY) {
+            sensorType === SensorType.HUMIDITY || sensorType === SensorType.BATTERY ||
+            sensorType === SensorType.SLIDER) {
             return typeof value === 'number' && !isNaN(value);
         }
         
-        if (sensorType === SensorType.WATER_LEAK || unit === 'boolean') {
-            return typeof value === 'boolean';
+        if (sensorType === SensorType.WATER_LEAK || sensorType === SensorType.SWITCH ||
+            unit === 'boolean') {
+            return typeof value === 'boolean' || typeof value === 'number';
         }
         
         if (sensorType === SensorType.OTHER) {
             // For 'other' type, allow numbers and booleans only
             return typeof value === 'number' || typeof value === 'boolean';
         }
+
+        // TOOD: if it's provided as a string - we could convert it to the right type
         
         return false;
     }
@@ -126,7 +135,6 @@ module.exports = function(app) {
 
         // Connect to the MQTT server and start listening for changes
         // to the topics we're interested in
-                
         if (options.enabled)
         {
             app.debug("Connecting to MQTT server...");
@@ -510,11 +518,122 @@ module.exports = function(app) {
                     return "Pa"; // Pascal
                 case SensorType.WATER_LEAK:
                     return "boolean"; // Boolean for presence/absence
+                case SensorType.SLIDER:
+                case SensorType.SWITCH:
+                    return "unitless";
                 case SensorType.OTHER:
                 default:
                     return null; // Or a sensible default like an empty string
             }
         }
+
+/*
+Units:
+        Unitless
+        Speed
+            - knots
+            - kph
+            - mph
+            - m/s
+        Flow
+            - m3/s
+            - l/min
+            - l/h
+            - g/min
+            - g/h
+        Fuel Distance
+            - m/m3
+            - nm/l
+            - nm/g
+            - km/l
+            - mpg
+        Energy Distance
+            - m/J
+            - nm/J
+            - km/J
+            - nm/kWh
+            - km/kWh
+        Temperature
+            - K
+            - C
+            - F
+        Length
+            - m
+            - mm
+            - fathom
+            - nm
+            - km
+            - mi
+            - feet
+            - inch
+        Volume
+            - liter
+            - m3
+            - gallon
+        Current
+            - A
+            - mA
+        Potential
+            - V
+            - mV
+        Charge
+            - C
+            - Ah
+        Power
+            - W
+            - mW
+        Energy
+            - J
+            - kWh
+        Resistence
+            - ohm
+            - kiloohm
+        Pressure
+            - Pa
+            - kPa
+            - hPa
+            - mbar
+            - bar
+            - psi
+            - mmHg
+            - inHg
+        Density
+            - kg/m3
+        Time
+            - seconds
+            - minutes
+            - hours
+            - days
+            - HH:MM:SS
+        Angular Velocity
+            - rad/s
+            - deg/s
+            - deg/min
+        Angle
+            - rad
+            - deg
+            - grad
+        Frequency
+            - rpm
+            - Hz
+            - KHz
+            - MHz
+            - GHz
+        Ratio
+            - precent
+            - percentraw
+            - ratio
+        Position
+            - latitudeMin
+            - latitudeSec
+            - longitudeMin
+            - longitudeSec
+
+
+
+
+*/
+
 
         /**
          * Returns the data type for a given sensor configuration
@@ -538,12 +657,14 @@ module.exports = function(app) {
             if (sensorType === SensorType.TEMPERATURE || 
                 sensorType === SensorType.PRESSURE || 
                 sensorType === SensorType.HUMIDITY || 
-                sensorType === SensorType.BATTERY) {
+                sensorType === SensorType.BATTERY ||
+                sensorType === SensorType.SLIDER) {
                 return "number";
             }
             
             // Water leak is typically boolean
-            if (sensorType === SensorType.WATER_LEAK) {
+            if (sensorType === SensorType.WATER_LEAK || 
+                sensorType === SensorType.SWITCH)  {
                 return "boolean";
             }
             
@@ -588,8 +709,13 @@ module.exports = function(app) {
                     
                     // Check if this path is writable and add writable metadata
                     if (sensor.writable && sensor.command_topic) {
-                        metadataValue.writable = true;
-                        app.debug(`Marking path ${path} as writable in metadata`);
+                        app.debug(`Marking path ${path} as supports PUT in metadata`);
+                        metadataValue.supportsPut = true;
+                        
+                        app.debug(`Registering PUT handler for ${path}`);
+                        app.registerPutHandler('vessels.self', path, plugin.putHandler, 'signalk-mqtt-sensors');
+                        app.registerActionHandler('vessels.self', path, plugin.putHandler, 'signalk-mqtt-sensors');
+
                     }
                     
                     // Always add metadata since we now emit type and units for all properties

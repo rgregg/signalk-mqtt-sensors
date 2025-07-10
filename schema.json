@@ -66,6 +66,8 @@
                                         "battery",
                                         "water_leak",
                                         "pressure",
+                                        "switch",
+                                        "slider",
                                         "other"
                                     ],
                                     "default": "temperature"
@@ -85,7 +87,8 @@
                                         "Pa",
                                         "hPa",
                                         "mmHg",
-                                        "literal"
+                                        "literal",
+                                        "unitless"
                                     ],
                                     "default": "C"
                                 },
@@ -97,7 +100,7 @@
                                 },
                                 "command_topic": {
                                     "type": "string",
-                                    "title": "Command Topic",
+                                    "title": "MQTT Command Topic",
                                     "description": "MQTT topic where commands will be published when the SignalK path value changes (required if writable is enabled)."
                                 }
                             },
