@@ -37,6 +37,13 @@
                             "rows": 1,
                             "cols": 50
                         }
+                    },
+                    "command_topic": {
+                        "ui:widget": "textarea",
+                        "ui:options": {
+                            "rows": 1,
+                            "cols": 50
+                        }
                     }
                 }
             }

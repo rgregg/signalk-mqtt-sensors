@@ -25,10 +25,85 @@ const SensorType = Object.freeze({
 module.exports = function(app) {
     const plugin = {};
     const hasRegisteredWithHomeAssistant = new Map();
+    const writablePaths = new Map(); // Map of SignalK path -> {commandTopic, sensor}
 
     plugin.id = app_name;
     plugin.name = "MQTT Sensors";
     plugin.description = "Signal K node server plugin for mapping values between MQTT and Signal K topics";
+
+    // Handle PUT requests to writable paths
+    plugin.handleMessage = function(path, value, callback) {
+        app.debug(`Received PUT request to path: ${path} with value: ${value}`);
+        
+        const writableConfig = writablePaths.get(path);
+        if (!writableConfig) {
+            app.debug(`Path ${path} is not configured as writable`);
+            callback(new Error(`Path ${path} is not writable or not configured`));
+            return;
+        }
+
+        if (!plugin.mqttClient || !plugin.mqttClient.connected) {
+            app.debug('MQTT client is not connected, cannot publish command');
+            callback(new Error('MQTT client is not connected'));
+            return;
+        }
+
+        const { commandTopic, sensor } = writableConfig;
+        
+        // Validate the value type matches the sensor type
+        if (!isValidValueForSensor(value, sensor)) {
+            app.debug(`Invalid value type for sensor ${sensor.sensor}: ${typeof value}`);
+            callback(new Error(`Invalid value type for sensor type ${sensor.sensor}`));
+            return;
+        }
+
+        // Publish the value to the command topic
+        let payload = value;
+        if (typeof value === 'object') {
+            payload = JSON.stringify(value);
+        }
+
+        plugin.mqttClient.publish(commandTopic, payload.toString(), { qos: 1 }, (err) => {
+            if (err) {
+                app.debug(`Error publishing command to topic ${commandTopic}:`, err.message);
+                callback(new Error(`Failed to publish command: ${err.message}`));
+            } else {
+                app.debug(`Successfully published command to topic ${commandTopic}: ${payload}`);
+                callback(null, {
+                    state: 'COMPLETED',
+                    statusCode: 200
+                });
+            }
+        });
+    };
+
+    /**
+     * Validates if a value is appropriate for the given sensor type
+     * @param {any} value - The value to validate
+     * @param {Object} sensor - The sensor configuration
+     * @returns {boolean} True if the value is valid for the sensor type
+     */
+    function isValidValueForSensor(value, sensor) {
+        const sensorType = sensor.sensor;
+        const unit = sensor.unit;
+        
+        // Only allow writable for number and boolean types
+        if (sensorType === SensorType.TEMPERATURE || sensorType === SensorType.PRESSURE || 
+            sensorType === SensorType.HUMIDITY || sensorType === SensorType.BATTERY) {
+            return typeof value === 'number' && !isNaN(value);
+        }
+        
+        if (sensorType === SensorType.WATER_LEAK || unit === 'boolean') {
+            return typeof value === 'boolean';
+        }
+        
+        if (sensorType === SensorType.OTHER) {
+            // For 'other' type, allow numbers and booleans only
+            return typeof value === 'number' || typeof value === 'boolean';
+        }
+        
+        return false;
+    }
 
     // define the option schema for the add-on
     plugin.schema =  require("./schema.json");
@@ -489,12 +564,25 @@ module.exports = function(app) {
             if (!Array.isArray(from))
                 return [];
 
+            // Clear previous writable paths
+            writablePaths.clear();
+
             app.debug("Loading MQTT sensor definitions...")
             from.forEach( (topic) => {
                 app.debug("MQTT Topic: ", topic);
                 app.debug("  Defined Sensors:");
                 topic.sensors.forEach( (sensor) => {
-                    app.debug(`${JSON.stringify(sensor)}`)
+                    app.debug(`${JSON.stringify(sensor)}`);
+                    
+                    // Register writable sensors
+                    if (sensor.writable && sensor.command_topic) {
+                        const path = sensor.destination;
+                        writablePaths.set(path, {
+                            commandTopic: sensor.command_topic,
+                            sensor: sensor
+                        });
+                        app.debug(`Registered writable path: ${path} -> ${sensor.command_topic}`);
+                    }
                 });
             });
 
@@ -731,6 +819,8 @@ module.exports = function(app) {
         }
         // Clear the registration map
         hasRegisteredWithHomeAssistant.clear();
+        // Clear writable paths
+        writablePaths.clear();
     }
 
     /**
