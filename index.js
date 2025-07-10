@@ -813,7 +813,7 @@ module.exports = function(app) {
      */
     plugin.stop = function() {
         app.debug(`${app_name} is stopping`);
-        if (plugin.mqttClient) {
+        if (plugin.mqttClient && typeof plugin.mqttClient.end === 'function') {
             plugin.mqttClient.end();
             plugin.mqttClient = null;
         }
