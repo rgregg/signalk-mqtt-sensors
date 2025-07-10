@@ -514,6 +514,51 @@ module.exports = function(app) {
                 default:
                     return null; // Or a sensible default like an empty string
             }
+        }
+
+        /**
+         * Returns the data type for a given sensor configuration
+         * @param {Object} sensor - The sensor configuration object
+         * @returns {string} The data type (number, boolean, or string)
+         */
+        function getDataType(sensor) {
+            const sensorType = sensor.sensor;
+            const unit = sensor.unit;
+            
+            // Determine type based on unit first, then sensor type
+            if (unit === "boolean") {
+                return "boolean";
+            }
+            
+            if (unit === "string" || unit === "literal") {
+                return "string";
+            }
+            
+            // For numeric sensor types
+            if (sensorType === SensorType.TEMPERATURE || 
+                sensorType === SensorType.PRESSURE || 
+                sensorType === SensorType.HUMIDITY || 
+                sensorType === SensorType.BATTERY) {
+                return "number";
+            }
+            
+            // Water leak is typically boolean
+            if (sensorType === SensorType.WATER_LEAK) {
+                return "boolean";
+            }
+            
+            // For "other" type, infer from unit
+            if (sensorType === SensorType.OTHER) {
+                // If it's a numeric unit, return number
+                if (["C", "F", "K", "percent", "ratio", "Pa", "hPa", "mmHg"].includes(unit)) {
+                    return "number";
+                }
+                // Default to string for unknown units in "other" type
+                return "string";
+            }
+            
+            // Default fallback
+            return "string";
         }        
 
         /**
@@ -535,9 +580,11 @@ module.exports = function(app) {
                     // Build metadata object
                     let metadataValue = {};
                     
-                    if (unit) {
-                        metadataValue.units = unit;
-                    }
+                    // Always emit units - use "unitless" when no units are defined
+                    metadataValue.units = unit || "unitless";
+                    
+                    // Add type information based on sensor configuration
+                    metadataValue.type = getDataType(sensor);
                     
                     // Check if this path is writable and add writable metadata
                     if (sensor.writable && sensor.command_topic) {
@@ -545,13 +592,11 @@ module.exports = function(app) {
                         app.debug(`Marking path ${path} as writable in metadata`);
                     }
                     
-                    // Only add metadata if we have something to publish
-                    if (Object.keys(metadataValue).length > 0) {
-                        meta.push({
-                            path: path,
-                            value: metadataValue
-                        });
-                    }
+                    // Always add metadata since we now emit type and units for all properties
+                    meta.push({
+                        path: path,
+                        value: metadataValue
+                    });
 
                 })
             })
