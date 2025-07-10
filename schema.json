@@ -66,6 +66,8 @@
                                         "battery",
                                         "water_leak",
                                         "pressure",
+                                        "switch",
+                                        "slider",
                                         "other"
                                     ],
                                     "default": "temperature"
@@ -85,9 +87,21 @@
                                         "Pa",
                                         "hPa",
                                         "mmHg",
-                                        "literal"
+                                        "literal",
+                                        "unitless"
                                     ],
                                     "default": "C"
+                                },
+                                "writable": {
+                                    "type": "boolean",
+                                    "title": "Writable",
+                                    "description": "Enable this sensor to accept PUT requests from SignalK and forward them to MQTT command topic. Only works with number and boolean sensor types.",
+                                    "default": false
+                                },
+                                "command_topic": {
+                                    "type": "string",
+                                    "title": "MQTT Command Topic",
+                                    "description": "MQTT topic where commands will be published when the SignalK path value changes (required if writable is enabled)."
                                 }
                             },
                             "required": [

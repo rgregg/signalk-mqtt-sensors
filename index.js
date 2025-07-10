@@ -1,6 +1,9 @@
 /*
  * Copyright 2024 Ryan Gregg (ryan@ryangregg.com).
  * Licensed under Apache 2 license. See LICENSE for more information.
+ *
+ * A lot of the understanding of the object model of Siganl K plug-ins comes from
+ * here: https://demo.signalk.org/documentation/_signalk/server-api/ServerAPI.html
  */
 
 const app_name = "signalk-mqtt-sensors";
@@ -19,16 +22,97 @@ const SensorType = Object.freeze({
     HUMIDITY: "humidity",
     BATTERY: "battery",
     PRESSURE: "pressure",
+    SWITCH: "switch",
+    SLIDER: "slider",
     OTHER: "other"
 });
 
 module.exports = function(app) {
     const plugin = {};
     const hasRegisteredWithHomeAssistant = new Map();
+    const writablePaths = new Map(); // Map of SignalK path -> {commandTopic, sensor}
 
     plugin.id = app_name;
     plugin.name = "MQTT Sensors";
     plugin.description = "Signal K node server plugin for mapping values between MQTT and Signal K topics";
+
+    // Handle PUT requests to writable paths
+    plugin.putHandler = function (context, path, value, callback) {
+        app.debug(`Received PUT request to context: ${context} path: ${path} with value: ${value}`);
+        
+        const writableConfig = writablePaths.get(path);
+        if (!writableConfig) {
+            app.debug(`Path ${path} is not configured as writable`);
+            callback(new Error(`Path ${path} is not configured as writable`));
+            return;
+        }
+
+        if (!plugin.mqttClient || !plugin.mqttClient.connected) {
+            app.debug('MQTT client is not connected, cannot publish command');
+            callback(new Error('MQTT client is not connected'));
+            return;
+        }
+
+        const { commandTopic, sensor } = writableConfig;
+        
+        // Validate the value type matches the sensor type
+        if (!isValidValueForSensor(value, sensor)) {
+            app.debug(`Invalid value type for sensor ${sensor.sensor}: ${typeof value}`);
+            callback(new Error(`Invalid value type for sensor type ${sensor.sensor}`));
+            return;
+        }
+
+        // Publish the value to the command topic
+        let payload = value;
+        if (typeof value === 'object') {
+            payload = JSON.stringify(value);
+        }
+
+        plugin.mqttClient.publish(commandTopic, payload.toString(), { qos: 1 }, (err) => {
+            if (err) {
+                app.debug(`Error publishing command to topic ${commandTopic}:`, err.message);
+                callback(new Error(`Failed to publish command: ${err.message}`));
+            } else {
+                app.debug(`Successfully published command to topic ${commandTopic}: ${payload}`);
+                callback({ "state": "COMPLETED", "statusCode": 200 });
+            }
+        });
+        
+        // We need to return something immedately
+        return { state: 'PENDING' };
+    };
+
+    /**
+     * Validates if a value is appropriate for the given sensor type
+     * @param {any} value - The value to validate
+     * @param {Object} sensor - The sensor configuration
+     * @returns {boolean} True if the value is valid for the sensor type
+     */
+    function isValidValueForSensor(value, sensor) {
+        const sensorType = sensor.sensor;
+        const unit = sensor.unit;
+        
+        // Only allow writable for number and boolean types
+        if (sensorType === SensorType.TEMPERATURE || sensorType === SensorType.PRESSURE || 
+            sensorType === SensorType.HUMIDITY || sensorType === SensorType.BATTERY ||
+            sensorType === SensorType.SLIDER) {
+            return typeof value === 'number' && !isNaN(value);
+        }
+        
+        if (sensorType === SensorType.WATER_LEAK || sensorType === SensorType.SWITCH ||
+            unit === 'boolean') {
+            return typeof value === 'boolean' || typeof value === 'number';
+        }
+        
+        if (sensorType === SensorType.OTHER) {
+            // For 'other' type, allow numbers and booleans only
+            return typeof value === 'number' || typeof value === 'boolean';
+        }
+
+        // TOOD: if it's provided as a string - we could convert it to the right type
+        
+        return false;
+    }
 
     // define the option schema for the add-on
     plugin.schema =  require("./schema.json");
@@ -51,7 +135,6 @@ module.exports = function(app) {
 
         // Connect to the MQTT server and start listening for changes
         // to the topics we're interested in
-                
         if (options.enabled)
         {
             app.debug("Connecting to MQTT server...");
@@ -435,10 +518,168 @@ module.exports = function(app) {
                     return "Pa"; // Pascal
                 case SensorType.WATER_LEAK:
                     return "boolean"; // Boolean for presence/absence
+                case SensorType.SLIDER:
+                case SensorType.SWITCH:
+                    return "unitless";
                 case SensorType.OTHER:
                 default:
                     return null; // Or a sensible default like an empty string
             }
+        }
+
+/*
+Units:
+        Unitless
+        Speed
+            - knots
+            - kph
+            - mph
+            - m/s
+        Flow
+            - m3/s
+            - l/min
+            - l/h
+            - g/min
+            - g/h
+        Fuel Distance
+            - m/m3
+            - nm/l
+            - nm/g
+            - km/l
+            - mpg
+        Energy Distance
+            - m/J
+            - nm/J
+            - km/J
+            - nm/kWh
+            - km/kWh
+        Temperature
+            - K
+            - C
+            - F
+        Length
+            - m
+            - mm
+            - fathom
+            - nm
+            - km
+            - mi
+            - feet
+            - inch
+        Volume
+            - liter
+            - m3
+            - gallon
+        Current
+            - A
+            - mA
+        Potential
+            - V
+            - mV
+        Charge
+            - C
+            - Ah
+        Power
+            - W
+            - mW
+        Energy
+            - J
+            - kWh
+        Resistence
+            - ohm
+            - kiloohm
+        Pressure
+            - Pa
+            - kPa
+            - hPa
+            - mbar
+            - bar
+            - psi
+            - mmHg
+            - inHg
+        Density
+            - kg/m3
+        Time
+            - seconds
+            - minutes
+            - hours
+            - days
+            - HH:MM:SS
+        Angular Velocity
+            - rad/s
+            - deg/s
+            - deg/min
+        Angle
+            - rad
+            - deg
+            - grad
+        Frequency
+            - rpm
+            - Hz
+            - KHz
+            - MHz
+            - GHz
+        Ratio
+            - precent
+            - percentraw
+            - ratio
+        Position
+            - latitudeMin
+            - latitudeSec
+            - longitudeMin
+            - longitudeSec
+
+
+
+
+*/
+
+
+        /**
+         * Returns the data type for a given sensor configuration
+         * @param {Object} sensor - The sensor configuration object
+         * @returns {string} The data type (number, boolean, or string)
+         */
+        function getDataType(sensor) {
+            const sensorType = sensor.sensor;
+            const unit = sensor.unit;
+            
+            // Determine type based on unit first, then sensor type
+            if (unit === "boolean") {
+                return "boolean";
+            }
+            
+            if (unit === "string" || unit === "literal") {
+                return "string";
+            }
+            
+            // For numeric sensor types
+            if (sensorType === SensorType.TEMPERATURE || 
+                sensorType === SensorType.PRESSURE || 
+                sensorType === SensorType.HUMIDITY || 
+                sensorType === SensorType.BATTERY ||
+                sensorType === SensorType.SLIDER) {
+                return "number";
+            }
+            
+            // Water leak is typically boolean
+            if (sensorType === SensorType.WATER_LEAK || 
+                sensorType === SensorType.SWITCH)  {
+                return "boolean";
+            }
+            
+            // For "other" type, infer from unit
+            if (sensorType === SensorType.OTHER) {
+                // If it's a numeric unit, return number
+                if (["C", "F", "K", "percent", "ratio", "Pa", "hPa", "mmHg"].includes(unit)) {
+                    return "number";
+                }
+                // Default to string for unknown units in "other" type
+                return "string";
+            }
+            
+            // Default fallback
+            return "string";
         }        
 
         /**
@@ -456,12 +697,32 @@ module.exports = function(app) {
                     app.debug('Discovering data for sensor', sensor);
                     const path = sensor.destination;
                     var unit = getSIUnit(sensor.sensor);
-                    if (unit) {
-                        meta.push({
-                            path: path,
-                            value: { units: unit }
-                        });
+                    
+                    // Build metadata object
+                    let metadataValue = {};
+                    
+                    // Always emit units - use "unitless" when no units are defined
+                    metadataValue.units = unit || "unitless";
+                    
+                    // Add type information based on sensor configuration
+                    metadataValue.type = getDataType(sensor);
+                    
+                    // Check if this path is writable and add writable metadata
+                    if (sensor.writable && sensor.command_topic) {
+                        app.debug(`Marking path ${path} as supports PUT in metadata`);
+                        metadataValue.supportsPut = true;
+                        
+                        app.debug(`Registering PUT handler for ${path}`);
+                        app.registerPutHandler('vessels.self', path, plugin.putHandler, 'signalk-mqtt-sensors');
+                        app.registerActionHandler('vessels.self', path, plugin.putHandler, 'signalk-mqtt-sensors');
+
                     }
+                    
+                    // Always add metadata since we now emit type and units for all properties
+                    meta.push({
+                        path: path,
+                        value: metadataValue
+                    });
 
                 })
             })
@@ -489,12 +750,25 @@ module.exports = function(app) {
             if (!Array.isArray(from))
                 return [];
 
+            // Clear previous writable paths
+            writablePaths.clear();
+
             app.debug("Loading MQTT sensor definitions...")
             from.forEach( (topic) => {
                 app.debug("MQTT Topic: ", topic);
                 app.debug("  Defined Sensors:");
                 topic.sensors.forEach( (sensor) => {
-                    app.debug(`${JSON.stringify(sensor)}`)
+                    app.debug(`${JSON.stringify(sensor)}`);
+                    
+                    // Register writable sensors
+                    if (sensor.writable && sensor.command_topic) {
+                        const path = sensor.destination;
+                        writablePaths.set(path, {
+                            commandTopic: sensor.command_topic,
+                            sensor: sensor
+                        });
+                        app.debug(`Registered writable path: ${path} -> ${sensor.command_topic}`);
+                    }
                 });
             });
 
@@ -725,12 +999,14 @@ module.exports = function(app) {
      */
     plugin.stop = function() {
         app.debug(`${app_name} is stopping`);
-        if (plugin.mqttClient) {
+        if (plugin.mqttClient && typeof plugin.mqttClient.end === 'function') {
             plugin.mqttClient.end();
             plugin.mqttClient = null;
         }
         // Clear the registration map
         hasRegisteredWithHomeAssistant.clear();
+        // Clear writable paths
+        writablePaths.clear();
     }
 
     /**
