@@ -531,10 +531,25 @@ module.exports = function(app) {
                     app.debug('Discovering data for sensor', sensor);
                     const path = sensor.destination;
                     var unit = getSIUnit(sensor.sensor);
+                    
+                    // Build metadata object
+                    let metadataValue = {};
+                    
                     if (unit) {
+                        metadataValue.units = unit;
+                    }
+                    
+                    // Check if this path is writable and add writable metadata
+                    if (sensor.writable && sensor.command_topic) {
+                        metadataValue.writable = true;
+                        app.debug(`Marking path ${path} as writable in metadata`);
+                    }
+                    
+                    // Only add metadata if we have something to publish
+                    if (Object.keys(metadataValue).length > 0) {
                         meta.push({
                             path: path,
-                            value: { units: unit }
+                            value: metadataValue
                         });
                     }
 
